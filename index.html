@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ClickDeck Pro · 互動簡報編輯器</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/editor.css" />
+</head>
+<body>
+
+  <!-- ============== TOPBAR ============== -->
+  <header class="topbar" role="banner">
+    <div class="topbar-group brand-group">
+      <div class="brand" aria-hidden="true">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="13" rx="2"></rect>
+            <path d="M8 21h8"></path>
+            <path d="M12 17v4"></path>
+            <path d="M7 9l3 3 7-6" stroke="#ea580c"></path>
+          </svg>
+        </span>
+        <span class="brand-name">ClickDeck<span class="brand-pro">Pro</span></span>
+      </div>
+
+      <div class="divider" aria-hidden="true"></div>
+
+      <div class="file-picker" role="group" aria-label="檔案來源">
+        <label class="select-shell" aria-label="範本庫">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"></path><path d="M6 12h12"></path><path d="M10 17h4"></path></svg>
+          <select id="library-select" title="選擇要編輯的 HTML 檔案" aria-label="選擇檔案">
+            <option value="">（選擇檔案）</option>
+          </select>
+          <svg class="chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </label>
+
+        <button type="button" id="btn-pick-dir" class="btn btn-ghost" title="選擇硬碟內的資料夾，讀取其中的 HTML 檔">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          <span>選擇資料夾</span>
+        </button>
+
+        <button type="button" id="btn-pick-file" class="btn btn-ghost" title="直接選擇硬碟上的單一 HTML 檔案開啟，存檔將覆蓋原檔">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>
+          <span>選擇檔案</span>
+        </button>
+      </div>
+
+      <div class="folder-status" role="status" aria-live="polite">
+        <span class="folder-label" id="folder-label" title="目前開啟的資料夾">預設資料夾</span>
+        <span id="dirty-flag" class="dirty dirty-flag hidden" aria-label="未儲存的變更">
+          <span class="dot" aria-hidden="true"></span>未儲存
+        </span>
+      </div>
+    </div>
+
+    <div class="topbar-group center-group">
+      <div id="block-toolbar" class="block-toolbar" role="toolbar" aria-label="區塊操作" title="先把滑鼠移到簡報中的元素以選取，再用這些按鈕操作">
+        <button type="button" class="bt-btn" data-op="up" disabled title="上移（Alt+↑）" aria-label="上移">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M5 12l7-7 7 7"></path></svg>
+        </button>
+        <button type="button" class="bt-btn" data-op="down" disabled title="下移（Alt+↓）" aria-label="下移">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M19 12l-7 7-7-7"></path></svg>
+        </button>
+        <span class="block-toolbar-sep" aria-hidden="true"></span>
+        <button type="button" class="bt-btn" data-op="left" disabled title="縮窄（Alt+←）" aria-label="縮窄">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 6l-6 6 6 6"></path><path d="M8 6v12"></path></svg>
+        </button>
+        <button type="button" class="bt-btn" data-op="right" disabled title="加寬（Alt+→）" aria-label="加寬">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6l6 6-6 6"></path><path d="M16 6v12"></path></svg>
+        </button>
+        <span class="block-toolbar-sep" aria-hidden="true"></span>
+        <button type="button" class="bt-btn" data-op="duplicate" disabled title="複製（Alt+D）" aria-label="複製">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h9"></path></svg>
+        </button>
+        <button type="button" class="bt-btn bt-danger" data-op="delete" disabled title="刪除此元素" aria-label="刪除此元素">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+        </button>
+      </div>
+
+      <div id="zoom-toolbar" class="zoom-toolbar" role="toolbar" aria-label="預覽縮放" title="放大／縮小中間預覽。重設可回到符合畫面大小。">
+        <button type="button" id="btn-zoom-out" class="bt-btn" disabled title="縮小預覽" aria-label="縮小預覽">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M8 11h6"></path><path d="M20 20l-3.5-3.5"></path></svg>
+        </button>
+        <button type="button" id="btn-zoom-reset" class="zoom-percent" disabled title="重設為符合畫面" aria-label="重設縮放">100%</button>
+        <button type="button" id="btn-zoom-in" class="bt-btn" disabled title="放大預覽" aria-label="放大預覽">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M11 8v6"></path><path d="M8 11h6"></path><path d="M20 20l-3.5-3.5"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="topbar-group action-group">
+      <button type="button" id="btn-edit-mode" class="btn toggle btn-toggle on" aria-pressed="true" title="開啟時：點擊空白處不會換頁，方便編輯。關閉時：恢復原簡報的滑鼠／空白鍵換頁。">編輯模式：開</button>
+
+      <div class="divider" aria-hidden="true"></div>
+
+      <button type="button" id="btn-new-slide" class="btn btn-ghost" disabled title="新增投影片">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+        <span>＋新增投影片</span>
+      </button>
+      <button type="button" id="btn-insert-image" class="btn btn-ghost" disabled title="在目前投影片插入一張新圖片">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="M21 15l-5-5L5 21"></path></svg>
+        <span>插入圖片</span>
+      </button>
+      <button type="button" id="btn-save-as-template" class="btn btn-ghost" disabled title="把目前投影片存成樣板">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>
+        <span>存為樣板</span>
+      </button>
+      <button type="button" id="btn-style" class="btn btn-ghost" disabled title="調整配色與字體">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="10.5" r="2.5"></circle><circle cx="8.5" cy="7.5" r="2.5"></circle><circle cx="6.5" cy="12.5" r="2.5"></circle><path d="M12 22a10 10 0 1 1 8-16c1.7 2.4 1.3 5-1.5 5H16a2 2 0 0 0-1 3.7c1 .6 1.4 1.9.6 2.8A4 4 0 0 1 12 22z"></path></svg>
+        <span>樣式</span>
+      </button>
+      <button type="button" id="btn-preview" class="btn btn-ghost" disabled title="開新分頁以投影模式預覽">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        <span>預覽</span>
+      </button>
+      <button type="button" id="btn-repair-doc" class="btn btn-ghost" disabled title="掃描並清掉「runtime 動態填充」容器（如底部進度點、目錄）累積的多餘節點">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+        <span>修復結構</span>
+      </button>
+
+      <div class="divider" aria-hidden="true"></div>
+
+      <button type="button" id="btn-save-as" class="btn btn-ghost" disabled title="另存新檔">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+        <span>另存新檔</span>
+      </button>
+      <button type="button" id="btn-save" class="btn primary btn-primary" disabled title="儲存">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6"></path></svg>
+        <span>儲存</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============== MAIN WORKSPACE ============== -->
+  <main class="workspace">
+
+    <!-- LEFT: Slide list -->
+    <aside class="sidebar left" aria-label="投影片清單">
+      <div class="sidebar-head">
+        <span class="sidebar-title">投影片</span>
+        <span id="slide-count" class="sidebar-count" aria-hidden="true"></span>
+      </div>
+      <ol id="slide-list" class="slide-list" role="list"></ol>
+    </aside>
+
+    <!-- CENTER: Stage with iframe -->
+    <section class="stage" aria-label="簡報舞台">
+      <div class="stage-inner">
+        <iframe id="deck-frame" title="簡報預覽與編輯"></iframe>
+      </div>
+
+      <div id="stage-empty" class="stage-empty">
+        <div class="empty-art" aria-hidden="true">
+          <svg viewBox="0 0 200 140" width="200" height="140" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="14" y="20" width="172" height="100" rx="6" class="empty-frame"></rect>
+            <rect x="30" y="38" width="64" height="8" rx="2" class="empty-bar-a"></rect>
+            <rect x="30" y="54" width="100" height="6" rx="2" class="empty-bar-b"></rect>
+            <rect x="30" y="68" width="84" height="6" rx="2" class="empty-bar-b"></rect>
+            <rect x="30" y="86" width="50" height="22" rx="3" class="empty-bar-c"></rect>
+            <rect x="92" y="86" width="36" height="22" rx="3" class="empty-bar-c"></rect>
+            <circle cx="160" cy="100" r="14" class="empty-dot"></circle>
+            <path d="M154 100l5 5 9-10" class="empty-check"></path>
+          </svg>
+        </div>
+        <h2>載入簡報以開始編輯</h2>
+        <p>從左上角選擇 <code>C:\Users\Clare\Downloads\互動簡報</code> 資料夾內的 HTML 檔案。</p>
+        <p class="hint">編輯後直接儲存會覆蓋原檔，並自動產生 <code>.bak</code> 備份。</p>
+      </div>
+    </section>
+
+    <!-- RIGHT: Property panel -->
+    <aside class="sidebar right" aria-label="屬性面板">
+      <div class="sidebar-head">
+        <span class="sidebar-title">屬性</span>
+        <span class="sidebar-sub">Inspector</span>
+      </div>
+      <div id="prop-panel" class="prop-panel">
+        <p class="placeholder">在中間簡報點擊要編輯的文字、圖片或連結。</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ============== TOAST ============== -->
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- ============== TEMPLATE PICKER MODAL ============== -->
+  <div id="template-modal" class="modal hidden" data-mode="insert" role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box">
+      <header class="modal-head">
+        <div class="modal-head-text">
+          <h3 id="template-modal-title">選擇樣板</h3>
+          <p class="modal-sub">挑選一張現有的版型或片段插入。</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="關閉">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <div id="template-gallery" class="template-gallery"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== SAVE-AS-TEMPLATE MODAL ============== -->
+  <div id="save-template-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="save-template-title">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box narrow">
+      <header class="modal-head">
+        <div class="modal-head-text">
+          <h3 id="save-template-title">存為樣板</h3>
+          <p class="modal-sub">為這個區塊命名並選擇收納分類。</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="關閉">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <label class="field">
+          <span>樣板名稱</span>
+          <input id="tpl-name" type="text" placeholder="例：飛輪卡片組" />
+        </label>
+        <label class="field">
+          <span>分類</span>
+          <select id="tpl-category">
+            <option value="cover">封面</option>
+            <option value="section">章節分頁</option>
+            <option value="content" selected>內容頁</option>
+            <option value="list">列表</option>
+            <option value="table">表格</option>
+            <option value="diagram">圖解</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <div class="field">
+          <span>抽取項目</span>
+          <label class="check"><input type="checkbox" id="tpl-extract-css" checked /><span>CSS 樣式（自動加唯一前綴避免衝突）</span></label>
+          <label class="check"><input type="checkbox" id="tpl-extract-js" checked /><span>JS 區塊（偵測到相關動畫邏輯時納入）</span></label>
+        </div>
+        <div id="tpl-extract-preview" class="extract-preview"></div>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>取消</button>
+        <button type="button" id="tpl-confirm-save" class="btn primary btn-primary">儲存樣板</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============== STYLE DRAWER ============== -->
+  <aside id="style-drawer" class="drawer hidden" aria-label="樣式面板">
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head">
+        <div class="drawer-head-text">
+          <h3 id="drawer-title">樣式調整</h3>
+          <p class="drawer-sub">調整這份簡報的色彩與字型。</p>
+        </div>
+        <button type="button" class="icon-btn" data-close-drawer aria-label="關閉樣式面板">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></svg>
+        </button>
+      </header>
+      <div class="drawer-body">
+        <section class="drawer-section">
+          <div class="section-head">
+            <h4>配色（CSS 變數）</h4>
+          </div>
+          <div id="style-colors" class="color-grid"></div>
+          <p id="style-colors-hint" class="hint">此簡報沒有使用 CSS 變數，以下提供全站通用色調整。</p>
+        </section>
+        <section class="drawer-section">
+          <div class="section-head">
+            <h4>字體</h4>
+            <span class="hint">套用至整份簡報</span>
+          </div>
+          <label class="field">
+            <span>整體字體</span>
+            <select id="style-font">
+              <option value="">（保留原樣）</option>
+              <option value="'Microsoft JhengHei', '微軟正黑體', sans-serif">微軟正黑體</option>
+              <option value="'Noto Sans TC', sans-serif">思源黑體</option>
+              <option value="'PingFang TC', sans-serif">蘋方</option>
+              <option value="'Source Han Serif TC', serif">思源宋體</option>
+              <option value="serif">系統襯線</option>
+              <option value="sans-serif">系統無襯線</option>
+            </select>
+          </label>
+        </section>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Author credit -->
+  <div class="author-credit" aria-label="作者">製作者：黃政文</div>
+
+  <!-- ============== SCRIPTS (load order locked) ============== -->
+  <script defer src="js/core.js"></script>
+  <script defer src="js/history.js"></script>
+  <script defer src="js/slides.js"></script>
+  <script defer src="js/editable.js"></script>
+  <script defer src="js/starter-templates.js"></script>
+  <script defer src="js/templates.js"></script>
+  <script defer src="js/style-editor.js"></script>
+  <script defer>window.addEventListener('DOMContentLoaded',()=>Editor.init());</script>
+</body>
+</html>
