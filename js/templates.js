@@ -85,12 +85,16 @@
     const container = document.createElement("div");
     container.style.cssText = "position:absolute;inset:0;background:#fff;overflow:hidden;";
     const style = document.createElement("style");
-    style.textContent = tpl.css || "";
+    // Scoped like the real insertion — an unscoped `.slide { … }` or
+    // `body { … }` rule here would restyle the editor UI itself, because
+    // this <style> lives in the editor document, not in an iframe.
+    style.textContent = scopeTemplateCss(tpl.css || "", tpl.id);
     container.appendChild(style);
     const wrap = document.createElement("div");
     wrap.innerHTML = tpl.html || "";
     const slide = wrap.firstElementChild;
     if (slide) {
+      slide.setAttribute(SCOPE_ATTR, tpl.id);
       slide.style.position = "absolute";
       slide.style.inset = "0";
       slide.style.width = "1920px";
@@ -108,6 +112,142 @@
       const scale = Math.min(rect.width / 1920, rect.height / 1080);
       frame.style.transform = `scale(${scale})`;
     });
+  }
+
+  // === Template CSS scoping ============================================
+  // Historic bug: template CSS is injected into <head> verbatim. Saved
+  // templates keep framework selectors (.slide, .slide.active, .slide h1 …)
+  // un-renamed, so inserting one restyled EVERY page of the destination deck.
+  // Fix: stamp the inserted slide with data-tpl-scope="<tpl.id>" and rewrite
+  // each selector so it only applies inside that slide.
+  //
+  // Every selector is emitted in two scoped variants joined with a comma:
+  //   root form:        .slide.active            -> .slide.active:where([data-tpl-scope="id"])
+  //   descendant form:  .slide.active            -> :where([data-tpl-scope="id"]) .slide.active
+  // Their union covers "the stamped slide itself + anything inside it" without
+  // needing to know which compounds can match the root — a variant that can't
+  // match is simply dead. `:where()` carries zero specificity, so every
+  // original specificity relationship (template rules vs. the destination
+  // deck's own stylesheet) is preserved exactly.
+  // html / body / :root selectors are re-rooted onto the slide instead — the
+  // slide's ancestors are outside the scope by definition.
+
+  const SCOPE_ATTR = "data-tpl-scope";
+
+  function scopeSelectorPart(sel, scopeSel) {
+    sel = sel.trim();
+    if (!sel) return "";
+    // Leading html / body / :root token → the stamped slide takes its place.
+    const rootedRe = /^(html|body|:root)(?![\w-])/i;
+    if (rootedRe.test(sel)) {
+      return sel.replace(rootedRe, scopeSel);
+    }
+    // First compound = selector up to the first top-level combinator.
+    let depth = 0, cut = sel.length;
+    for (let i = 0; i < sel.length; i++) {
+      const ch = sel[i];
+      if (ch === "(" || ch === "[") depth++;
+      else if (ch === ")" || ch === "]") depth--;
+      else if (depth === 0 && (ch === " " || ch === "\t" || ch === ">" || ch === "+" || ch === "~")) {
+        cut = i;
+        break;
+      }
+    }
+    const compound = sel.slice(0, cut);
+    const rest = sel.slice(cut);
+    // Attach :where(scope) to the compound, but before any pseudo-element
+    // (`.a::before` must become `.a:where(...)::before`).
+    const pe = compound.search(/::|:(?:before|after|first-line|first-letter)(?![\w-])/i);
+    const rootForm = pe >= 0
+      ? compound.slice(0, pe) + `:where(${scopeSel})` + compound.slice(pe) + rest
+      : compound + `:where(${scopeSel})` + rest;
+    const descForm = `:where(${scopeSel}) ` + sel;
+    return rootForm + ", " + descForm;
+  }
+
+  function scopeSelectorText(selectorText, scopeSel) {
+    // Split the selector list on top-level commas only (`:is(.a, .b)` stays whole).
+    const parts = [];
+    let depth = 0, cur = "";
+    for (const ch of selectorText) {
+      if (ch === "(" || ch === "[") depth++;
+      else if (ch === ")" || ch === "]") depth--;
+      if (ch === "," && depth === 0) { parts.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    parts.push(cur);
+    return parts.map(p => scopeSelectorPart(p, scopeSel)).filter(Boolean).join(", ");
+  }
+
+  function scopeRuleList(ruleList, scopeSel, out) {
+    for (const rule of Array.from(ruleList)) {
+      if (rule.type === CSSRule.STYLE_RULE) {
+        const newSel = scopeSelectorText(rule.selectorText, scopeSel);
+        out.push(rule.cssText.replace(/^[^{]+/, newSel + " "));
+      } else if (rule.type === CSSRule.MEDIA_RULE || rule.type === CSSRule.SUPPORTS_RULE) {
+        const inner = [];
+        scopeRuleList(rule.cssRules, scopeSel, inner);
+        if (inner.length) {
+          const cond = rule.media ? rule.media.mediaText : rule.conditionText;
+          out.push((rule.type === CSSRule.MEDIA_RULE ? "@media " : "@supports ") + cond + " {\n" + inner.join("\n") + "\n}");
+        }
+      } else {
+        // @keyframes / @font-face / anything else: pass through untouched —
+        // keyframes are already renamed per-template at save time.
+        out.push(rule.cssText);
+      }
+    }
+  }
+
+  function scopeTemplateCss(cssText, tplId) {
+    if (!cssText || !cssText.trim()) return cssText || "";
+    const scopeSel = `[${SCOPE_ATTR}="${tplId}"]`;
+    // Parse with the browser's own CSS parser via a never-applied probe sheet
+    // (media="not all") — regex-only parsing would mangle @keyframes blocks.
+    const probe = document.createElement("style");
+    probe.media = "not all";
+    probe.textContent = cssText;
+    document.head.appendChild(probe);
+    try {
+      const sheet = probe.sheet;
+      if (!sheet || !sheet.cssRules) return cssText;
+      const out = [];
+      scopeRuleList(sheet.cssRules, scopeSel, out);
+      return out.join("\n");
+    } catch (e) {
+      // Parsing failed (shouldn't happen for same-document inline sheets) —
+      // fall back to the unscoped CSS rather than dropping styles entirely.
+      return cssText;
+    } finally {
+      probe.remove();
+    }
+  }
+
+  // Legacy repair: decks that already contain an UNSCOPED __tpl_style_<id>__
+  // block (inserted before scoping existed) get it swapped for the scoped
+  // version. Existing instances of the template in the deck must then carry
+  // the scope attribute or they'd lose their styling — identify them by the
+  // template's unique (prefix-renamed) class tokens.
+  function stampLegacyTemplateInstances(doc, tpl) {
+    const probe = document.createElement("div");
+    probe.innerHTML = tpl.html || "";
+    const tokens = new Set();
+    probe.querySelectorAll("*").forEach(el => {
+      if (el.classList) el.classList.forEach(c => { if (!FRAMEWORK_CLASSES.has(c)) tokens.add(c); });
+    });
+    if (!tokens.size) return 0;
+    let stamped = 0;
+    Slides.detectSlides(doc).forEach(slide => {
+      if (slide.getAttribute(SCOPE_ATTR)) return;
+      const hit = [...tokens].some(t =>
+        (slide.classList && slide.classList.contains(t)) ||
+        slide.querySelector("." + (window.CSS && CSS.escape ? CSS.escape(t) : t)));
+      if (hit) {
+        slide.setAttribute(SCOPE_ATTR, tpl.id);
+        stamped++;
+      }
+    });
+    return stamped;
   }
 
   async function deleteTemplate(id) {
@@ -129,11 +269,19 @@
 
     if (tpl.css) {
       const styleId = `__tpl_style_${tpl.id}__`;
-      if (!doc.getElementById(styleId)) {
+      const scopedCss = scopeTemplateCss(tpl.css, tpl.id);
+      const existing = doc.getElementById(styleId);
+      if (!existing) {
         const style = doc.createElement("style");
         style.id = styleId;
-        style.textContent = tpl.css;
+        style.textContent = scopedCss;
         doc.head.appendChild(style);
+      } else if (existing.textContent.indexOf(`[${SCOPE_ATTR}="${tpl.id}"]`) < 0) {
+        // Same template was inserted before scoping existed: its old style
+        // block still leaks into every page. Stamp the already-present
+        // instances first so they keep their look, then swap in the scoped CSS.
+        stampLegacyTemplateInstances(doc, tpl);
+        existing.textContent = scopedCss;
       }
     }
 
@@ -154,6 +302,9 @@
       Editor.toast("樣板 HTML 為空", "err");
       return;
     }
+    // The scope stamp: the scoped CSS above only applies inside elements
+    // carrying this attribute, so the template can never restyle other pages.
+    slide.setAttribute(SCOPE_ATTR, tpl.id);
     const slides = Slides.detectSlides(doc);
     const at = st.currentIndex >= 0 ? st.currentIndex : slides.length - 1;
     if (!slides.length) {

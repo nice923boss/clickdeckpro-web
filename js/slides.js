@@ -377,8 +377,11 @@
       }
 
       // Edit mode + outside editable: stop nav keys so stray arrow/space
-      // presses don't accidentally paginate the deck.
-      if (Editor.state.editMode && NAV_KEYS.has(e.key)) {
+      // presses don't accidentally paginate the deck. Alt-combos are exempt —
+      // decks paginate with bare arrows only, and Alt+arrow (+Shift) is the
+      // block editor's move/resize shortcut set, which this guard would
+      // otherwise swallow before the block editor's bubble listener runs.
+      if (Editor.state.editMode && NAV_KEYS.has(e.key) && !e.altKey) {
         e.stopPropagation();
         e.stopImmediatePropagation();
         e.preventDefault();

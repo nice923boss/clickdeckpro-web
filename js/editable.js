@@ -1150,6 +1150,40 @@
     if (global.Slides) Slides.rebuildThumbsOnly();
   }
 
+  // === Per-slide full-bleed background image ===========================
+  // Stored as inline styles on the slide element itself, so it only ever
+  // affects that one slide — never the deck stylesheet or other pages.
+  const SLIDE_BG_PROPS = ["background-image", "background-size", "background-position", "background-repeat"];
+
+  function slideHasBgImage(slide) {
+    return !!(slide && slide.style && slide.style.backgroundImage);
+  }
+
+  // Apply to both the live iframe slide and its deckDoc mirror (like
+  // applySlideAlign) so thumbnails and structural reloads keep the change.
+  function setSlideBgImage(index, dataUrl) {
+    const idoc = Editor.ui.deckFrame && Editor.ui.deckFrame.contentDocument;
+    if (!idoc) return false;
+    const live = Slides.detectSlides(idoc)[index];
+    if (!live) return false;
+    if (global.History) History.push();
+    const mirror = Editor.state.slides && Editor.state.slides[index];
+    [live, mirror].forEach(s => {
+      if (!s) return;
+      if (dataUrl) {
+        s.style.setProperty("background-image", `url("${dataUrl}")`);
+        s.style.setProperty("background-size", "cover");
+        s.style.setProperty("background-position", "center");
+        s.style.setProperty("background-repeat", "no-repeat");
+      } else {
+        SLIDE_BG_PROPS.forEach(p => s.style.removeProperty(p));
+      }
+    });
+    Editor.markDirty();
+    if (global.Slides) Slides.rebuildThumbsOnly();
+    return true;
+  }
+
   // Render the per-slide layout controls (currently vertical alignment) into
   // the right-hand inspector. Called from Slides.activate when a slide becomes
   // the active selection, so the inspector reflects the slide, not a block.
@@ -1172,6 +1206,7 @@
     // layout; a momentarily hidden (display:none) slide is left enabled.
     const unsupported = !!display && display !== "none" && !isFlexColumn;
     const dis = unsupported ? " disabled" : "";
+    const hasBg = slideHasBgImage(slide);
     panel.innerHTML = `
       <div class="target-tag">投影片 · 第 ${index + 1} 張</div>
       <div class="field">
@@ -1183,6 +1218,12 @@
         <p class="hint">${unsupported
           ? "此投影片的版面不是直向排列，垂直對齊不會生效，因此暫不開放。"
           : "「上下置中」會在內容放得下時垂直置中，內容過長時自動靠上並可向下捲動，避免標題被裁切。"}</p>
+      </div>
+      <div class="field">
+        <span>滿版底圖</span>
+        <input type="file" id="prop-slide-bg-file" accept="image/*" aria-label="上傳滿版底圖">
+        <button type="button" id="prop-slide-bg-remove" class="btn"${hasBg ? "" : " disabled"}>移除滿版底圖</button>
+        <p class="hint">上傳的圖片會鋪滿這一頁當背景，只影響這一張投影片，其它頁不受影響。</p>
       </div>
       <p class="placeholder">點擊中間簡報裡的文字、圖片或連結，即可編輯內容。</p>
     `;
@@ -1197,6 +1238,29 @@
         });
       });
     }
+    const bgFile = panel.querySelector("#prop-slide-bg-file");
+    const bgRemove = panel.querySelector("#prop-slide-bg-remove");
+    bgFile.addEventListener("change", async e => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        const info = await fileToBase64(f);
+        if (setSlideBgImage(index, info.dataUrl)) {
+          bgRemove.disabled = false;
+          imageResultToast(f, info, `已套用第 ${index + 1} 頁滿版底圖`);
+        }
+      } catch (err) {
+        Editor.toast("底圖套用失敗：" + err.message, "err");
+      } finally {
+        e.target.value = "";
+      }
+    });
+    bgRemove.addEventListener("click", () => {
+      if (setSlideBgImage(index, null)) {
+        bgRemove.disabled = true;
+        Editor.toast(`已移除第 ${index + 1} 頁滿版底圖`, "ok");
+      }
+    });
   }
 
   function showLinkProps(a) {
@@ -1421,6 +1485,14 @@
       Editor.toast("找不到當前投影片", "err");
       return;
     }
+    // Capture the selected block NOW — while the OS file dialog is open no
+    // pointer events reach the iframe, so the selection can't legitimately
+    // change; capturing early guards against it being cleared by the dialog's
+    // focus churn. Must live inside the current slide (the selection is
+    // sticky and may still point at a block on a previously viewed slide).
+    let anchor = (typeof window.__editorGetCurrentBlock === "function")
+      ? window.__editorGetCurrentBlock() : null;
+    if (anchor && (!slide.contains(anchor) || anchor === slide)) anchor = null;
     const picker = document.createElement("input");
     picker.type = "file";
     picker.accept = "image/*";
@@ -1432,11 +1504,11 @@
       try {
         const info = await fileToBase64(f);
         History.push();
-        const img = appendImageToSlide(iframeDoc, slide, info.dataUrl, f.name);
+        const img = appendImageToSlide(iframeDoc, slide, info.dataUrl, f.name, anchor);
         showImageProps(img);
         Editor.markDirty();
         Slides.rebuildThumbsOnly();
-        imageResultToast(f, info, "已插入圖片");
+        imageResultToast(f, info, anchor ? "已插入圖片（在選取區塊下方）" : "已插入圖片");
       } catch (err) {
         Editor.toast("插入圖片失敗：" + err.message, "err");
       }
@@ -1445,14 +1517,22 @@
     picker.click();
   }
 
-  function appendImageToSlide(iframeDoc, slide, dataUrl, fileName) {
+  // Insert an <img>. With an anchor block, the image lands directly after it
+  // (visually right below, inside the same column/container); otherwise it is
+  // appended at the end of the slide.
+  function appendImageToSlide(iframeDoc, slide, dataUrl, fileName, anchor) {
     const img = iframeDoc.createElement("img");
     img.src = dataUrl;
     img.alt = (fileName || "圖片").replace(/\.[^.]+$/, "");
-    img.style.maxWidth = "480px";
+    // min(480px, 100%): cap at 480px but never overflow a narrow column.
+    img.style.maxWidth = "min(480px, 100%)";
     img.style.display = "block";
     img.style.margin = "16px";
-    slide.appendChild(img);
+    if (anchor && anchor.isConnected && slide.contains(anchor) && anchor !== slide && anchor.parentNode) {
+      anchor.parentNode.insertBefore(img, anchor.nextSibling);
+    } else {
+      slide.appendChild(img);
+    }
     attachImageHandlers(img);
     return img;
   }
@@ -1863,8 +1943,8 @@
       if (tgt && (tgt.isContentEditable || (tgt.closest && tgt.closest('[contenteditable="true"]')))) return;
       if (e.key === "ArrowUp") { e.preventDefault(); performOp(currentBlock, "up"); }
       else if (e.key === "ArrowDown") { e.preventDefault(); performOp(currentBlock, "down"); }
-      else if (e.key === "ArrowLeft") { e.preventDefault(); performOp(currentBlock, "left"); }
-      else if (e.key === "ArrowRight") { e.preventDefault(); performOp(currentBlock, "right"); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); performOp(currentBlock, e.shiftKey ? "moveleft" : "left"); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); performOp(currentBlock, e.shiftKey ? "moveright" : "right"); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); performOp(currentBlock, "duplicate"); }
     });
 
@@ -1882,6 +1962,15 @@
         const prev = block.previousElementSibling;
         if (prev) parent.insertBefore(block, prev);
       } else if (op === "down") {
+        const next = block.nextElementSibling;
+        if (next) parent.insertBefore(next, block);
+      } else if (op === "moveleft") {
+        // Swap with the previous sibling — in a row/grid layout that's the
+        // block to the left. Same DOM op as "up", offered separately so users
+        // reordering columns aren't forced to reason about "up = left".
+        const prev = block.previousElementSibling;
+        if (prev) parent.insertBefore(block, prev);
+      } else if (op === "moveright") {
         const next = block.nextElementSibling;
         if (next) parent.insertBefore(next, block);
       } else if (op === "left" || op === "right") {
@@ -1924,6 +2013,13 @@
     window.__editorPerformBlockOp = (op) => {
       if (!currentBlock || !currentBlock.isConnected) return;
       performOp(currentBlock, op);
+    };
+
+    // Read-only accessor for the currently selected block. Used by
+    // insertImageToCurrentSlide to place a new image right below the user's
+    // selection instead of at the bottom of the slide.
+    window.__editorGetCurrentBlock = () => {
+      return (currentBlock && currentBlock.isConnected) ? currentBlock : null;
     };
 
     syncTopButtons();
