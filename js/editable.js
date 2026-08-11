@@ -1597,6 +1597,45 @@
     else block.style.width = `${px}px`;
   }
 
+  // Undo applyBlockWidth. A frozen px width is what breaks left/right symmetry:
+  // it was captured at one viewport size, so at any other size the block either
+  // overflows its container to the right or falls short of it.
+  // Only elements carrying applyBlockWidth's exact signature (`max-width: none`
+  // plus an explicit px width or `flex: 0 0 XXpx`) are touched, so widths the
+  // deck author wrote by hand — resized images, progress bars — survive.
+  function clearAppliedBlockWidth(el) {
+    const s = el.style;
+    if (s.maxWidth !== "none") return false;
+    if (!/px$/.test(s.width || "") && !/px/.test(s.flexBasis || "")) return false;
+    s.removeProperty("width");
+    s.removeProperty("flex");
+    s.removeProperty("max-width");
+    if (s.length === 0) el.removeAttribute("style");
+    return true;
+  }
+
+  // After the reset a block that the deck's own stylesheet caps (e.g.
+  // `.lead { max-width: 36em }`) sits flush left in a wider container. Auto
+  // margins put it back in the middle. Restricted to block / flex-column
+  // parents: in a flex row or a grid, auto margins would steal the row's free
+  // space or collapse a grid item to fit-content instead of centring it.
+  function centerBlockInParent(block, parent, win) {
+    block.style.removeProperty("margin-left");
+    block.style.removeProperty("margin-right");
+    const pcs = win.getComputedStyle(parent);
+    const isFlex = pcs.display === "flex" || pcs.display === "inline-flex";
+    const centerable =
+      pcs.display === "block" || pcs.display === "flow-root" ||
+      (isFlex && /column/.test(pcs.flexDirection));
+    if (!centerable) return;
+    const avail = parent.clientWidth -
+      (parseFloat(pcs.paddingLeft) || 0) - (parseFloat(pcs.paddingRight) || 0);
+    if (block.getBoundingClientRect().width < avail - 1) {
+      block.style.marginLeft = "auto";
+      block.style.marginRight = "auto";
+    }
+  }
+
   function installBlockEditor(iframeDoc) {
     if (iframeDoc.__editorBlockBound) return;
     iframeDoc.__editorBlockBound = true;
@@ -1982,6 +2021,13 @@
         const step = Math.max(20, Math.round(curWidth * 0.1));
         const newWidth = Math.max(MIN_BLOCK_WIDTH, curWidth + (op === "right" ? step : -step));
         applyBlockWidth(block, newWidth, isFlexRow);
+      } else if (op === "resetwidth") {
+        // Descendants too: the block the user selects is usually the container
+        // (a section, a card grid), while the frozen widths sit on the rows
+        // inside it. One click on the outer block clears the whole subtree.
+        clearAppliedBlockWidth(block);
+        block.querySelectorAll("[style]").forEach(clearAppliedBlockWidth);
+        centerBlockInParent(block, parent, win);
       } else if (op === "duplicate") {
         const clone = block.cloneNode(true);
         // Strip our edit-time attributes so the clone gets re-scanned cleanly.
