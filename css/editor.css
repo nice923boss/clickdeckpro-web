@@ -119,6 +119,13 @@ body {
   background: var(--bg-app);
   display: grid;
   grid-template-rows: var(--topbar-h) 1fr;
+  /* Explicit minmax(0, 1fr) column. Without it the single implicit `auto`
+     track is floored by the topbar's min-content width (the action group is
+     flex: 0 0 auto / nowrap, so it never shrinks). Whenever the topbar needed
+     more room than the viewport, that floor widened the whole grid and pushed
+     .workspace — including the right INSPECTOR panel — past the right edge,
+     where overflow: hidden clipped it. */
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -1467,28 +1474,37 @@ body {
 /* =========================================================
    RESPONSIVE
    =========================================================
-   Topbar columns: brand | center (block+zoom toolbars) | actions
-   At narrower widths the side columns shrink (grid 1fr), so we
-   progressively collapse: button labels → folder text → brand text.
-   This prevents flex children from visually overflowing their
-   columns and overlapping adjacent groups. */
+   Topbar layout: brand | center (block+zoom toolbars) | actions.
+   .action-group is flex: 0 0 auto with nowrap — it never shrinks — so the
+   topbar has a hard minimum width at every stage of compaction. Measured
+   max-content width per stage (including the 顯示隱藏內容 toggle):
+
+     full labels           2093px
+     action labels off     1657px
+     + toggles icon-only   1453px
+     + brand / folder off  1269px
+
+   Each breakpoint fires just above the width the PREVIOUS stage needs.
+   The old values (1900 / 1280 / 1200) all sat below it, leaving bands where
+   nothing could shrink and the topbar overflowed: 1901–2092, 1281–1656,
+   1201–1452, 981–1268. The first band is a 1920px screen at 100% browser
+   zoom, where 儲存 and the INSPECTOR panel fell off the right edge; at 110%
+   zoom the viewport dropped to ~1745px and landed inside a fitting band.
+   Sidebar widths keep their own breakpoints below — they are unrelated to
+   topbar compaction and must not start shrinking this early. */
 /* File picker buttons stay icon-only at all widths — text is redundant
    with the picker icons (folder, file) and the labels add 200+px to the
    topbar that the long filename select already needs. */
 .file-picker .btn-ghost span { display: none; }
 .file-picker .btn-ghost { padding: 0 8px; }
 
-@media (max-width: 1900px) {
+@media (max-width: 2100px) {
   .action-group .btn-ghost span { display: none; }
   .action-group .btn-ghost { padding: 0 8px; }
   .folder-label { max-width: 140px; }
   .select-shell select { max-width: 130px; }
 }
-@media (max-width: 1280px) {
-  :root {
-    --sidebar-left: 232px;
-    --sidebar-right: 288px;
-  }
+@media (max-width: 1660px) {
   .folder-label { max-width: 120px; }
   .action-group .btn-toggle { padding-left: 28px; padding-right: 8px; font-size: 0; }
   .action-group .btn-toggle::before { left: 6px; }
@@ -1496,19 +1512,27 @@ body {
   .select-shell select { min-width: 90px; max-width: 120px; }
   .select-shell { padding: 0 24px 0 8px; }
 }
-@media (max-width: 1200px) {
-  :root {
-    --sidebar-left: 200px;
-    --sidebar-right: 256px;
-  }
+@media (max-width: 1460px) {
   .brand-name, .brand-pro { display: none; }
   .folder-status { display: none; }
   .select-shell select { min-width: 80px; max-width: 110px; }
   .select-shell { padding: 0 22px 0 6px; }
 }
-@media (max-width: 980px) {
-  /* Below this width the topbar may horizontally scroll;
-     we keep all controls accessible rather than hide them. */
+@media (max-width: 1280px) {
+  :root {
+    --sidebar-left: 232px;
+    --sidebar-right: 288px;
+  }
+}
+@media (max-width: 1270px) {
+  /* Below the narrowest compaction stage the topbar may horizontally
+     scroll; we keep all controls reachable rather than clip them. */
   .topbar { overflow-x: auto; }
   .select-shell select { min-width: 70px; max-width: 90px; }
+}
+@media (max-width: 1200px) {
+  :root {
+    --sidebar-left: 200px;
+    --sidebar-right: 256px;
+  }
 }
