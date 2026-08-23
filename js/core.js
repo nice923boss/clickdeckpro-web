@@ -11,6 +11,7 @@
     deckCssVars: {},      // map of :root var name -> value
     clipboardSlide: null, // outerHTML of the most recently copied/cut slide
     editMode: true,       // when true, clicks on blank area won't advance the deck
+    revealHidden: false,  // when true, click-to-reveal answer text is forced visible for editing
     dirHandle: null,      // FileSystemDirectoryHandle when user picks a folder
     fileHandle: null,     // FileSystemFileHandle for the currently loaded file
     zoomLevel: 1.0,       // multiplier on top of auto-fit scale; 1.0 = fit, 1.5 = 150%
@@ -273,6 +274,10 @@
     const storagePoly = clone.querySelector("#__editor_storage_polyfill__");
     if (storagePoly) storagePoly.remove();
     clone.querySelectorAll(".__editor_block_overlay__").forEach(el => el.remove());
+    // "顯示隱藏內容" marker — clone IS <html>, so the attribute sits on it.
+    if (window.Editable && Editable.REVEAL_ATTR) {
+      clone.removeAttribute(Editable.REVEAL_ATTR);
+    }
   }
 
   function renderDeckIntoFrame() {
@@ -375,6 +380,10 @@
     // to freeze on the orphaned one. Normalize on save so the published file
     // always opens at slide 0 with exactly one .active.
     normalizeActiveSlideForSave(clone);
+    // `.reveal.open` is runtime state: the deck's own handler adds it when the
+    // audience clicks a card. If it survives into the file the card ships with
+    // the answer already showing, which kills the "先猜再點" design.
+    normalizeRevealCardsForSave(clone);
     return "<!DOCTYPE html>\n" + clone.outerHTML;
   }
 
@@ -384,6 +393,10 @@
     actives.forEach(s => s.classList.remove("active"));
     const first = clone.querySelector(".slide");
     if (first) first.classList.add("active");
+  }
+
+  function normalizeRevealCardsForSave(clone) {
+    clone.querySelectorAll(".reveal.open").forEach(c => c.classList.remove("open"));
   }
 
   // Manual structural repair: sync iframe edits into deckDoc, run the
@@ -543,6 +556,7 @@
     ui.btnPreview = $("#btn-preview");
     ui.btnRepairDoc = $("#btn-repair-doc");
     ui.btnEditMode = $("#btn-edit-mode");
+    ui.btnRevealHidden = $("#btn-reveal-hidden");
     ui.btnZoomIn = $("#btn-zoom-in");
     ui.btnZoomOut = $("#btn-zoom-out");
     ui.btnZoomReset = $("#btn-zoom-reset");
@@ -583,6 +597,18 @@
         else Editable.restoreGoto(iframeDoc);
       }
       toast(state.editMode ? "編輯模式開啟：點空白不換頁" : "編輯模式關閉：恢復原簡報互動", "ok");
+    });
+    ui.btnRevealHidden.addEventListener("click", () => {
+      state.revealHidden = !state.revealHidden;
+      ui.btnRevealHidden.classList.toggle("on", state.revealHidden);
+      ui.btnRevealHidden.classList.toggle("off", !state.revealHidden);
+      ui.btnRevealHidden.setAttribute("aria-pressed", String(state.revealHidden));
+      ui.btnRevealHidden.textContent = state.revealHidden ? "顯示隱藏內容：開" : "顯示隱藏內容：關";
+      const iframeDoc = ui.deckFrame && ui.deckFrame.contentDocument;
+      if (iframeDoc && window.Editable) Editable.applyRevealHidden(iframeDoc);
+      toast(state.revealHidden
+        ? "隱藏內容已展開，可直接編輯（存檔後仍是點了才開）"
+        : "隱藏內容已收合，恢復簡報原本的顯示狀態", "ok");
     });
     ui.btnZoomIn.addEventListener("click", zoomIn);
     ui.btnZoomOut.addEventListener("click", zoomOut);

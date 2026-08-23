@@ -4,6 +4,10 @@
 
   const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "META", "LINK", "TITLE", "HEAD"]);
 
+  // Set on <html> inside the iframe while "顯示隱藏內容" is on. Stripped by
+  // core.stripEditorInjections so it never reaches the saved file.
+  const REVEAL_ATTR = "data-editor-reveal-all";
+
   function install(iframeDoc) {
     injectStyle(iframeDoc);
     // Suspend inline goTo(N) handlers BEFORE scan/installBlockEditor so the
@@ -15,6 +19,25 @@
     attachDragDrop(iframeDoc);
     attachSelectionWatcher(iframeDoc);
     installBlockEditor(iframeDoc);
+    // Re-apply the "show click-to-reveal content" flag: the iframe reloads on
+    // every structural op, so without this the toggle silently drops off.
+    applyRevealHidden(iframeDoc);
+  }
+
+  // === Click-to-reveal content ==========================================
+  // Decks hide answer text behind a click: `.reveal .ans { display:none }`
+  // flipped on by `.reveal.open .ans { display:block }`. In edit mode the
+  // click never reaches the deck's own toggle (Slides.attachClickNav swallows
+  // clicks on non-editable targets), so that text was unreachable for editing.
+  // We force it visible with CSS only — no `.open` class — because a class
+  // added here would be serialized into the saved file and the card would
+  // ship pre-answered.
+
+  function applyRevealHidden(doc) {
+    if (!doc || !doc.documentElement) return;
+    const on = !!(Editor && Editor.state && Editor.state.revealHidden);
+    if (on) doc.documentElement.setAttribute(REVEAL_ATTR, "");
+    else doc.documentElement.removeAttribute(REVEAL_ATTR);
   }
 
   // === Click-to-goto handling ===========================================
@@ -77,17 +100,48 @@
   //
   // Two-pronged fix:
   //   A. Containers explicitly marked data-clickdeck-runtime="fill" get
-  //      their children stripped at serialize time. This is the canonical
+  //      their generated children stripped at serialize time (static ones
+  //      survive — see isRuntimeGeneratedChild). This is the canonical
   //      contract going forward — new templates should carry this attr.
   //   B. repairDocumentStructure() runs a heuristic sweep for legacy decks
   //      without the marker, looking at well-known dots/TOC container
   //      ids/classes and only clearing those whose children share one
   //      tag+className signature (i.e. obviously generator output).
 
+  // A runtime-fill container can also hold STATIC markup the deck's script
+  // never re-creates — e.g. `<nav id="toc" data-clickdeck-runtime="fill">`
+  // owns the runtime-appended TOC buttons *and* its own `<button id="tocClose">`.
+  // Wiping innerHTML deletes that button permanently, and the deck's
+  // `getElementById('tocClose').addEventListener(...)` then throws on load,
+  // killing every listener bound after it (reveal cards, mask-to-close,
+  // initial counter/progress paint). So strip generated children only.
+  //
+  // A child counts as static when it carries an id (generator output can't:
+  // N siblings would need N duplicate ids) or the explicit opt-out attribute
+  // data-clickdeck-runtime="keep". Templates whose generator assigns ids to
+  // its own nodes must mark the container's static children instead.
+  function isRuntimeGeneratedChild(el) {
+    if (el.id) return false;
+    if (el.getAttribute("data-clickdeck-runtime") === "keep") return false;
+    return true;
+  }
+
+  // Remove the runtime-generated children of `el`, keep the static ones.
+  // Returns how many were removed.
+  function clearRuntimeFill(el) {
+    let removed = 0;
+    Array.from(el.children).forEach(kid => {
+      if (!isRuntimeGeneratedChild(kid)) return;
+      kid.remove();
+      removed++;
+    });
+    return removed;
+  }
+
   function cleanupRuntimeFillForSerialize(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('[data-clickdeck-runtime="fill"]').forEach(el => {
-      if (el.children.length) el.innerHTML = "";
+      if (el.children.length) clearRuntimeFill(el);
     });
   }
 
@@ -211,9 +265,9 @@
     // A. Marked containers: always clear.
     doc.querySelectorAll('[data-clickdeck-runtime="fill"]').forEach(el => {
       report.scanned++;
-      const n = el.children.length;
-      if (n === 0) return;
-      el.innerHTML = "";
+      if (el.children.length === 0) return;
+      const n = clearRuntimeFill(el);
+      if (n === 0) return; // only static children (e.g. a TOC close button)
       report.cleared++;
       report.removed += n;
       report.containers.push({ kind: "marked", name: describeContainer(el), removed: n });
@@ -223,10 +277,18 @@
     if (slidesCount > 0) {
       doc.querySelectorAll(REPAIR_LEGACY_SELECTOR).forEach(el => {
         if (el.hasAttribute("data-clickdeck-runtime")) return;
-        const kids = Array.from(el.children);
+        const allKids = Array.from(el.children);
         const name = describeContainer(el);
-        if (kids.length === 0) return; // 空容器，沒累積
+        if (allKids.length === 0) return; // 空容器，沒累積
         report.scanned++;
+        // Static children (id / data-clickdeck-runtime="keep") are never
+        // generator output, so they stay out of every signature test below
+        // and out of the strip itself.
+        const kids = allKids.filter(isRuntimeGeneratedChild);
+        if (kids.length === 0) {
+          report.skipped.push({ name, count: allKids.length, reason: "子節點全為靜態元素" });
+          return;
+        }
         if (kids.length <= slidesCount) {
           report.skipped.push({ name, count: kids.length, reason: `子節點 ${kids.length} ≤ 投影片數 ${slidesCount}` });
           return;
@@ -252,11 +314,11 @@
             report.skipped.push({ name, count: kids.length, reason: `toc-item ${itemCount} ≤ 投影片數 ${slidesCount}` });
             return;
           }
-          el.innerHTML = "";
+          const tocRemoved = clearRuntimeFill(el);
           el.setAttribute("data-clickdeck-runtime", "fill");
           report.cleared++;
-          report.removed += kids.length;
-          report.containers.push({ kind: "toc", name, removed: kids.length, items: itemCount });
+          report.removed += tocRemoved;
+          report.containers.push({ kind: "toc", name, removed: tocRemoved, items: itemCount });
           return;
         }
         // Tolerate per-element state classes (is-active / is-prev / …) by
@@ -267,8 +329,7 @@
           report.skipped.push({ name, count: kids.length, reason: "子節點無共同 class" });
           return;
         }
-        const n = kids.length;
-        el.innerHTML = "";
+        const n = clearRuntimeFill(el);
         // Persist the marker so future serialize calls automatically strip
         // children that the deck's own runtime script will re-append in the
         // iframe. Without this, the saved HTML keeps whatever the iframe held
@@ -530,6 +591,14 @@
         outline: 2px solid rgba(212,91,7,1);
         background: rgba(255,250,220,.97);
         cursor: text;
+      }
+      /* 顯示隱藏內容：把 .reveal 卡片的答案區塊攤開來編輯。只加樣式、
+         不加 .open class，所以存檔後卡片仍是「點了才開」。 */
+      html[${REVEAL_ATTR}] .reveal .ans {
+        display: block !important;
+        outline: 1px dashed rgba(212,91,7,.55);
+        outline-offset: 3px;
+        background: rgba(212,91,7,.05);
       }
       [data-edit-highlight="image"]:hover::after {
         content: "點擊更換圖片";
@@ -2096,6 +2165,7 @@
     install, scan, showTextProps, showImageProps, showLinkProps,
     showGotoProps, showSlideProps,
     suspendGoto, restoreGoto, cleanupGotoForSerialize,
+    applyRevealHidden, REVEAL_ATTR,
     cleanupRuntimeFillForSerialize, repairDocumentStructure,
     findGotoHost,
     insertImageToCurrentSlide,
