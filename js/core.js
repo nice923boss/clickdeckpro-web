@@ -418,10 +418,11 @@
     const slidesCount = (state.slides && state.slides.length) ||
       state.deckDoc.querySelectorAll(".slide").length;
     const report = Editable.repairDocumentStructure(state.deckDoc, slidesCount);
-    const cssNote = report.cssChanged
-      ? `；CSS 修補：${(report.cssActions || []).join("、")}`
-      : "";
-    if (report.cleared === 0 && !report.cssChanged) {
+    // `stamped` counts containers that held exactly one frozen set (nothing to
+    // remove yet) but now carry the runtime-fill marker. That still changes the
+    // document and still has to be saved, otherwise the next save freezes a
+    // second set and the dots / 目錄 start doubling again.
+    if (report.cleared === 0 && !report.stamped && !report.cssChanged) {
       if (report.skipped && report.skipped.length) {
         // Surface why each candidate container was passed over, so the user
         // can tell whether the file is already clean or the heuristic just
@@ -437,14 +438,25 @@
     }
     renderDeckIntoFrame();
     markDirty();
-    if (report.cleared === 0 && report.cssChanged) {
-      toast(`未清理累積節點，但已修補 navbar 置中 CSS${cssNote}`, "ok");
-      return;
+    const parts = [];
+    if (report.cleared > 0) {
+      const list = report.containers
+        .filter(c => c.removed > 0)
+        .map(c => `${c.name}（移除 ${c.removed}）`)
+        .join("、");
+      parts.push(`已清理 ${report.cleared} 個容器、共 ${report.removed} 個多餘節點：${list}`);
     }
-    const list = report.containers
-      .map(c => `${c.name}（移除 ${c.removed}）`)
-      .join("、");
-    toast(`已清理 ${report.cleared} 個容器、共 ${report.removed} 個多餘節點：${list}${cssNote}`, "ok");
+    if (report.stamped > 0) {
+      const list = report.containers
+        .filter(c => c.removed === 0)
+        .map(c => c.name)
+        .join("、");
+      parts.push(`已標記 ${report.stamped} 個 runtime 容器（存檔時自動剝除，防止再累積）：${list}`);
+    }
+    if (report.cssChanged) {
+      parts.push(`CSS 修補：${(report.cssActions || []).join("、")}`);
+    }
+    toast(parts.join("；"), "ok");
   }
 
   async function saveDeck(asName) {

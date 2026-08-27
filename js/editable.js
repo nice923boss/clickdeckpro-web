@@ -145,9 +145,16 @@
     });
   }
 
+  // TOC containers are matched by shape, not by one hard-coded id: the classic
+  // ClickDeck deck ships `<nav id="toc">`, which `#tocList, .toc-list` never
+  // hit, so its accumulated items survived every repair run while the sibling
+  // `#dots` (caught by the wildcard below) got cleaned, so the file looked
+  // fixed but the 目錄 panel kept growing one full set per open/save cycle.
+  // Anchored patterns instead of a bare `*="toc"` substring match, which would
+  // also hit unrelated words containing "toc" (stock, photocard, …).
   const REPAIR_LEGACY_SELECTOR = [
     "#navMini", ".nav-mini",
-    "#tocList", ".toc-list",
+    '[id^="toc" i]', '[class~="toc" i]', '[class*="toc-" i]', '[class*="toc_" i]',
     '[id*="dots" i]', '[class*="dots" i]',
     '[class*="pagination" i]', '[class*="indicator" i]'
   ].join(",");
@@ -255,7 +262,7 @@
   function repairDocumentStructure(doc, slidesCount, opts) {
     opts = opts || {};
     const report = {
-      scanned: 0, cleared: 0, removed: 0,
+      scanned: 0, cleared: 0, removed: 0, stamped: 0,
       containers: [], skipped: [],
       cssChanged: false, cssActions: [],
       slidesCount,
@@ -289,8 +296,15 @@
           report.skipped.push({ name, count: allKids.length, reason: "子節點全為靜態元素" });
           return;
         }
-        if (kids.length <= slidesCount) {
-          report.skipped.push({ name, count: kids.length, reason: `子節點 ${kids.length} ≤ 投影片數 ${slidesCount}` });
+        // Fewer than one full set per slide is not generator output (e.g. a
+        // hand-written 3-link `.pagination`), so leave it completely alone.
+        // EXACTLY one set is the "frozen once" fingerprint: the deck saved its
+        // runtime output a single time and no browser has doubled it yet. The
+        // on-screen count is still correct so nothing needs removing, but the
+        // container must be stamped, or the next save freezes a second set and
+        // the 目錄 doubles again. Stamping is handled at the clear site below.
+        if (kids.length < slidesCount) {
+          report.skipped.push({ name, count: kids.length, reason: `子節點 ${kids.length} < 投影片數 ${slidesCount}` });
           return;
         }
         const sameTag = kids.every(k => k.tagName === kids[0].tagName);
@@ -305,17 +319,23 @@
         // are all TOC-family elements, gate on the .toc-item count instead: a
         // clean TOC carries exactly one .toc-item per slide, so more than
         // slidesCount means a frozen set got re-appended on load.
-        const isToc = el.id === "tocList" || el.classList.contains("toc-list");
+        const isToc = /^toc([-_A-Z]|$)/.test(el.id || "") ||
+          Array.from(el.classList).some(c => /^toc([-_]|$)/i.test(c));
         const allTocFamily = kids.every(k =>
           k.classList.contains("toc-item") || k.classList.contains("toc-section"));
         if (isToc && allTocFamily) {
           const itemCount = kids.filter(k => k.classList.contains("toc-item")).length;
-          if (itemCount <= slidesCount) {
-            report.skipped.push({ name, count: kids.length, reason: `toc-item ${itemCount} ≤ 投影片數 ${slidesCount}` });
+          if (itemCount < slidesCount) {
+            report.skipped.push({ name, count: kids.length, reason: `toc-item ${itemCount} < 投影片數 ${slidesCount}` });
             return;
           }
-          const tocRemoved = clearRuntimeFill(el);
+          const tocRemoved = itemCount > slidesCount ? clearRuntimeFill(el) : 0;
           el.setAttribute("data-clickdeck-runtime", "fill");
+          if (tocRemoved === 0) {
+            report.stamped++;
+            report.containers.push({ kind: "toc-stamp", name, removed: 0, items: itemCount });
+            return;
+          }
           report.cleared++;
           report.removed += tocRemoved;
           report.containers.push({ kind: "toc", name, removed: tocRemoved, items: itemCount });
@@ -329,13 +349,18 @@
           report.skipped.push({ name, count: kids.length, reason: "子節點無共同 class" });
           return;
         }
-        const n = clearRuntimeFill(el);
+        const n = kids.length > slidesCount ? clearRuntimeFill(el) : 0;
         // Persist the marker so future serialize calls automatically strip
         // children that the deck's own runtime script will re-append in the
         // iframe. Without this, the saved HTML keeps whatever the iframe held
         // at serialize time (e.g. 20 dots), and the next time a browser opens
         // the file the runtime script doubles it (20 → 40 → 80 …).
         el.setAttribute("data-clickdeck-runtime", "fill");
+        if (n === 0) {
+          report.stamped++;
+          report.containers.push({ kind: "stamp", name, removed: 0, shared: shared.join(" ") });
+          return;
+        }
         report.cleared++;
         report.removed += n;
         report.containers.push({ kind: "heuristic", name, removed: n, shared: shared.join(" ") });
