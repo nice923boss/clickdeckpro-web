@@ -159,6 +159,20 @@
     '[class*="pagination" i]', '[class*="indicator" i]'
   ].join(",");
 
+  // Per-child state classes a dots / pagination generator toggles at runtime;
+  // they never identify the child, so they don't count as its class signature.
+  const REPAIR_STATE_TOKENS = new Set([
+    "on", "active", "is-active", "current", "is-current", "selected", "show", "visible",
+  ]);
+
+  // Tags that are legitimately empty in markup (void / replaced / form
+  // controls); stamping them would only add marker noise to the saved file.
+  const EMPTY_STAMP_SKIP_TAGS = new Set([
+    "AREA", "BASE", "BR", "COL", "EMBED", "HR", "IMG", "INPUT", "LINK", "META",
+    "SOURCE", "TRACK", "WBR", "SCRIPT", "STYLE", "TEMPLATE", "CANVAS", "SVG",
+    "IFRAME", "VIDEO", "AUDIO", "OBJECT", "TEXTAREA", "SELECT", "BUTTON",
+  ]);
+
   function describeContainer(el) {
     if (el.id) return "#" + el.id;
     if (el.className && typeof el.className === "string") {
@@ -280,6 +294,30 @@
       report.containers.push({ kind: "marked", name: describeContainer(el), removed: n });
     });
 
+    // A2. Containers that are EMPTY in the source file. Decks written outside
+    // ClickDeck (e.g. `<div id="dots"></div>` filled by their own script on
+    // load) never match sweep B because it only looks at containers that
+    // already hold children — so the first structural op freezes one runtime
+    // set into deckDoc and every reload appends another (25 → 51 → 77 …).
+    // An empty container outside the slides has nothing static to lose, so
+    // stamping it is always safe: the marker only strips children the deck's
+    // script re-creates anyway.
+    if (slidesCount > 0) {
+      const slides = (global.Slides && Slides.detectSlides) ? Slides.detectSlides(doc) : [];
+      const insideSlide = el => slides.some(s => s.contains(el));
+      doc.body && doc.body.querySelectorAll("[id], [class]").forEach(el => {
+        if (el.hasAttribute("data-clickdeck-runtime")) return;
+        if (EMPTY_STAMP_SKIP_TAGS.has(el.tagName)) return;
+        if (el.children.length !== 0) return;
+        if ((el.textContent || "").trim() !== "") return;
+        if (insideSlide(el)) return;
+        el.setAttribute("data-clickdeck-runtime", "fill");
+        report.scanned++;
+        report.stamped++;
+        report.containers.push({ kind: "empty-stamp", name: describeContainer(el), removed: 0 });
+      });
+    }
+
     // B. Heuristic sweep for legacy decks (no marker attribute).
     if (slidesCount > 0) {
       doc.querySelectorAll(REPAIR_LEGACY_SELECTOR).forEach(el => {
@@ -345,7 +383,13 @@
         // requiring at least one class token in common across all kids, not
         // exact className equality.
         const shared = sharedClassTokens(kids);
-        if (shared.length === 0) {
+        // Classless generator output (`<i>` dots where only the current one
+        // carries a state class such as `on`) shares no token either, yet is
+        // just as clearly a generated set: same tag, one per slide or more,
+        // and nothing but state tokens on any child.
+        const classless = shared.length === 0 && kids.every(k =>
+          Array.from(k.classList).every(c => REPAIR_STATE_TOKENS.has(c)));
+        if (shared.length === 0 && !classless) {
           report.skipped.push({ name, count: kids.length, reason: "子節點無共同 class" });
           return;
         }
@@ -625,6 +669,10 @@
         outline-offset: 3px;
         background: rgba(212,91,7,.05);
       }
+      /* Editor-only; lives in this stripped-on-save block instead of an
+         inline style so a foreign deck's own position rule on images is
+         never overridden in the saved file. */
+      [data-edit-highlight="image"] { position: relative; }
       [data-edit-highlight="image"]:hover::after {
         content: "點擊更換圖片";
         position: absolute; top: 4px; left: 4px;
@@ -748,7 +796,6 @@
     if (img.__editorImgBound) return;
     img.__editorImgBound = true;
     img.setAttribute("data-edit-highlight", "image");
-    if (!img.style.position) img.style.position = "relative";
     img.addEventListener("click", onImageClick, true);
   }
 

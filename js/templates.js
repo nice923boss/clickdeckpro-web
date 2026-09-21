@@ -132,7 +132,7 @@
   // html / body / :root selectors are re-rooted onto the slide instead — the
   // slide's ancestors are outside the scope by definition.
 
-  const SCOPE_ATTR = "data-tpl-scope";
+  const SCOPE_ATTR = TemplateHost.SCOPE_ATTR;
 
   function scopeSelectorPart(sel, scopeSel) {
     sel = sel.trim();
@@ -250,6 +250,48 @@
     return stamped;
   }
 
+  function templateStyleId(tplId) {
+    return `__tpl_style_${tplId}__`;
+  }
+
+  // Manual repair entry: re-run the adaptation over every template page and
+  // template style block already in the deck (pages inserted before this
+  // adaptation existed). Returns how many of each actually changed.
+  function adaptExistingTemplateSlides(doc) {
+    const result = { slides: 0, styles: 0 };
+    if (!doc || !doc.body) return result;
+    const host = TemplateHost.getProfile(doc);
+    if (!host) return result;
+
+    const roots = {};
+    Slides.detectSlides(doc).forEach(slide => {
+      const tplId = slide.getAttribute(SCOPE_ATTR);
+      if (!tplId) return;
+      const before = slide.outerHTML;
+      const root = TemplateHost.adaptRoot(slide, host, doc);
+      if (root.outerHTML !== before) result.slides++;
+      if (!roots[tplId]) roots[tplId] = root;
+    });
+
+    doc.querySelectorAll('style[id^="__tpl_style_"]').forEach(style => {
+      const m = /^__tpl_style_(.+)__$/.exec(style.id);
+      if (!m || !roots[m[1]]) return;
+      const tplId = m[1];
+      const tpl = cache.find(t => t.id === tplId);
+      let scoped = style.textContent;
+      if (scoped.indexOf(`[${SCOPE_ATTR}="${tplId}"]`) < 0) {
+        // Legacy unscoped block: scope it first (same path as insertTemplate).
+        scoped = scopeTemplateCss(tpl ? tpl.css : scoped, tplId);
+      }
+      const adapted = TemplateHost.adaptCss(scoped, roots[tplId], tplId, host);
+      if (adapted !== style.textContent) {
+        style.textContent = adapted;
+        result.styles++;
+      }
+    });
+    return result;
+  }
+
   async function deleteTemplate(id) {
     cache = cache.filter(t => t.id !== id);
     persist();
@@ -266,21 +308,38 @@
     History.push();
     Editor.syncDeckFromIframe();
     const doc = st.deckDoc;
+    const host = TemplateHost.getProfile(doc);
+
+    const wrap = doc.createElement("div");
+    wrap.innerHTML = tpl.html;
+    let slide = wrap.firstElementChild;
+    if (!slide) {
+      Editor.toast("樣板 HTML 為空", "err");
+      return;
+    }
+    // The scope stamp: the scoped CSS below only applies inside elements
+    // carrying this attribute, so the template can never restyle other pages.
+    slide.setAttribute(SCOPE_ATTR, tpl.id);
+    slide = TemplateHost.adaptRoot(slide, host, doc);
 
     if (tpl.css) {
-      const styleId = `__tpl_style_${tpl.id}__`;
-      const scopedCss = scopeTemplateCss(tpl.css, tpl.id);
+      const styleId = templateStyleId(tpl.id);
+      const scopedCss = TemplateHost.adaptCss(scopeTemplateCss(tpl.css, tpl.id), slide, tpl.id, host);
       const existing = doc.getElementById(styleId);
       if (!existing) {
         const style = doc.createElement("style");
         style.id = styleId;
         style.textContent = scopedCss;
         doc.head.appendChild(style);
-      } else if (existing.textContent.indexOf(`[${SCOPE_ATTR}="${tpl.id}"]`) < 0) {
-        // Same template was inserted before scoping existed: its old style
-        // block still leaks into every page. Stamp the already-present
-        // instances first so they keep their look, then swap in the scoped CSS.
-        stampLegacyTemplateInstances(doc, tpl);
+      } else {
+        if (existing.textContent.indexOf(`[${SCOPE_ATTR}="${tpl.id}"]`) < 0) {
+          // Same template was inserted before scoping existed: its old style
+          // block still leaks into every page. Stamp the already-present
+          // instances first so they keep their look before the swap below.
+          stampLegacyTemplateInstances(doc, tpl);
+        }
+        // Always refresh: the block is regenerated from the template source,
+        // so an instance inserted before host adaptation existed picks it up.
         existing.textContent = scopedCss;
       }
     }
@@ -295,16 +354,6 @@
       }
     }
 
-    const wrap = doc.createElement("div");
-    wrap.innerHTML = tpl.html;
-    const slide = wrap.firstElementChild;
-    if (!slide) {
-      Editor.toast("樣板 HTML 為空", "err");
-      return;
-    }
-    // The scope stamp: the scoped CSS above only applies inside elements
-    // carrying this attribute, so the template can never restyle other pages.
-    slide.setAttribute(SCOPE_ATTR, tpl.id);
     const slides = Slides.detectSlides(doc);
     const at = st.currentIndex >= 0 ? st.currentIndex : slides.length - 1;
     if (!slides.length) {
@@ -629,7 +678,7 @@
   }
 
   global.Templates = {
-    loadAll, openPicker, insertTemplate,
+    loadAll, openPicker, insertTemplate, adaptExistingTemplateSlides,
     openSaveAsTemplate, analyzeSlide, buildTemplate,
   };
 

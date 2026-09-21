@@ -418,11 +418,17 @@
     const slidesCount = (state.slides && state.slides.length) ||
       state.deckDoc.querySelectorAll(".slide").length;
     const report = Editable.repairDocumentStructure(state.deckDoc, slidesCount);
+    // Template pages inserted before host adaptation existed still carry
+    // their own visibility rule; re-shape them to this deck's convention.
+    const tplReport = (window.Templates && Templates.adaptExistingTemplateSlides)
+      ? Templates.adaptExistingTemplateSlides(state.deckDoc)
+      : { slides: 0, styles: 0 };
+    const tplChanged = tplReport.slides + tplReport.styles > 0;
     // `stamped` counts containers that held exactly one frozen set (nothing to
     // remove yet) but now carry the runtime-fill marker. That still changes the
     // document and still has to be saved, otherwise the next save freezes a
     // second set and the dots / 目錄 start doubling again.
-    if (report.cleared === 0 && !report.stamped && !report.cssChanged) {
+    if (report.cleared === 0 && !report.stamped && !report.cssChanged && !tplChanged) {
       if (report.skipped && report.skipped.length) {
         // Surface why each candidate container was passed over, so the user
         // can tell whether the file is already clean or the heuristic just
@@ -455,6 +461,9 @@
     }
     if (report.cssChanged) {
       parts.push(`CSS 修補：${(report.cssActions || []).join("、")}`);
+    }
+    if (tplChanged) {
+      parts.push(`已依本簡報的換頁慣例調整 ${tplReport.slides} 張樣板頁、${tplReport.styles} 個樣板樣式`);
     }
     toast(parts.join("；"), "ok");
   }
