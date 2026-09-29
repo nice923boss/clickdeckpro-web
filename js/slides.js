@@ -353,6 +353,7 @@
       Editable.install(iframe.contentDocument);
       attachClickNav(iframe.contentDocument);
       attachKeyboard(iframe.contentDocument);
+      watchActiveSlide(iframe.contentDocument);
       Editor.fitFrameToStage();
       if (after) after();
     };
@@ -362,15 +363,42 @@
   function attachKeyboard(doc) {
     const NAV_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Spacebar", "PageUp", "PageDown", "Home", "End"]);
     const handler = (e) => {
+      // Registered on both window and document; handle each event once so
+      // Ctrl+Z / Ctrl+Y don't undo or redo twice.
+      if (e.__clickdeckKeyHandled) return;
+      e.__clickdeckKeyHandled = true;
       const t = e.target;
       const inEditable = t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
 
+      if ((e.ctrlKey || e.metaKey) && (e.key || "").toLowerCase() === "s" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // Blur first so the edit session closes (finishEdit) before saving.
+        if (t && t.isContentEditable) (t.closest('[contenteditable="true"]') || t).blur();
+        Editor.saveDeck();
+        return;
+      }
+
       // Edit mode + inside an editable: swallow ALL key events at capture
       // phase so the deck's own keydown handlers (which often hijack
-      // Backspace/Enter/F/? for slide navigation) can't fire. Crucially we do
-      // NOT preventDefault — the browser's native contenteditable behavior
-      // (typing, Backspace/Delete, Ctrl+Z) still needs to run.
+      // Backspace/Enter/F/? for slide navigation) can't fire. Apart from the
+      // keys that end the edit session we do NOT preventDefault: the
+      // browser's native contenteditable behavior (typing, Backspace/Delete,
+      // Ctrl+Z) still needs to run. Because propagation stops here, element
+      // listeners never see these keys, so Enter / Escape are handled here.
       if (Editor.state.editMode && inEditable) {
+        // Enter while an IME is composing confirms the candidate; leave it.
+        if (t.isContentEditable && !e.isComposing && e.keyCode !== 229) {
+          const host = t.closest('[contenteditable="true"]') || t;
+          if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) {
+            e.preventDefault();
+            host.blur();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            doc.execCommand("insertLineBreak");
+          }
+        }
         e.stopPropagation();
         e.stopImmediatePropagation();
         return;
@@ -397,6 +425,28 @@
     // Capture phase so we run before the deck's own bubble-phase listeners.
     doc.addEventListener("keydown", handler, true);
     if (doc.defaultView) doc.defaultView.addEventListener("keydown", handler, true);
+  }
+
+  // Keep the thumbnail list in step when the deck navigates itself (edit mode
+  // off: the deck's own arrow keys or click-to-advance). Watching the slide
+  // class works for any engine, without hooking a deck API such as Deck.go.
+  function watchActiveSlide(doc) {
+    const slides = detectSlides(doc);
+    if (!slides.length) return;
+    const obs = new MutationObserver(() => {
+      const st = Editor.state;
+      if (Editor.ui.deckFrame.contentDocument !== doc) return;
+      const idx = slides.findIndex(s => s.classList.contains("active") || s.classList.contains("is-active"));
+      if (idx < 0 || idx === st.currentIndex || idx >= st.slides.length) return;
+      st.currentIndex = idx;
+      Editor.ui.slideList.querySelectorAll("li").forEach((li, n) => {
+        li.classList.toggle("active", n === idx);
+      });
+      const li = Editor.ui.slideList.querySelector(`li[data-index="${idx}"]`);
+      if (li) li.scrollIntoView({ block: "nearest" });
+      if (window.Editable && Editable.showSlideProps) Editable.showSlideProps(slides[idx], idx);
+    });
+    slides.forEach(s => obs.observe(s, { attributes: true, attributeFilter: ["class"] }));
   }
 
   function attachClickNav(doc) {
@@ -430,6 +480,15 @@
 
       if (t.closest("button, a, input, textarea, select, [onclick], [data-edit-highlight], [contenteditable='true']")) return;
       e.stopPropagation();
+
+      // Prompt cards / chips are not editable (Editable.scan skips them):
+      // the deck rebuilds them from prompts.js on every load.
+      const generated = t.closest("[data-prompt], [data-chips]");
+      if (generated) {
+        Editor.toast(generated.hasAttribute("data-prompt")
+          ? "這張提示詞卡由程式產生，請改原始檔 prompts.js"
+          : "這組標籤由程式產生，請改原始檔 prompts.js", "warn");
+      }
     }, true);
   }
 
@@ -441,7 +500,7 @@
     detectSlides, rebuild, rebuildThumbsOnly, activate,
     deleteSlide, moveSlide, insertSlide,
     copySelected, cutSelected, pasteAfterSelected,
-    attachClickNav, attachKeyboard, reloadFrame,
+    attachClickNav, attachKeyboard, watchActiveSlide, reloadFrame,
   };
 
 })(window);

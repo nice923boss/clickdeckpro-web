@@ -6,15 +6,41 @@
   const undoStack = [];
   const redoStack = [];
 
+  // Large inline scripts (engines, base64 image tables) are identical in every
+  // snapshot, so each one is stored once here and snapshots keep a token.
+  const SCRIPT_POOL_MIN = 10000;
+  const scriptPool = [];
+  const scriptPoolIndex = new Map();
+  const SCRIPT_TOKEN_RE = /\/\*__clickdeck_history_script_(\d+)__\*\//g;
+
+  function poolScripts(clone) {
+    clone.querySelectorAll("script").forEach(s => {
+      const text = s.textContent;
+      if (text.length < SCRIPT_POOL_MIN) return;
+      let n = scriptPoolIndex.get(text);
+      if (n === undefined) {
+        n = scriptPool.push(text) - 1;
+        scriptPoolIndex.set(text, n);
+      }
+      s.textContent = `/*__clickdeck_history_script_${n}__*/`;
+    });
+  }
+
   function captureState() {
     const iframe = Editor.ui.deckFrame;
     if (!iframe || !iframe.contentDocument || !iframe.contentDocument.documentElement) {
       return null;
     }
     // Clone and strip editor-injected artifacts so restored snapshots don't
-    // accumulate double-injection styling/attributes/polyfills.
-    const clone = iframe.contentDocument.documentElement.cloneNode(true);
+    // accumulate double-injection styling/attributes/polyfills. Runtime DOM
+    // (backdrop layers, rendered cards) goes back to its source shape too,
+    // otherwise the deck renders it a second time after undo.
+    const live = iframe.contentDocument.documentElement;
+    const clone = live.cloneNode(true);
+    const runtimePairs = RuntimeBaseline.pair(live, clone);
     Editor.stripEditorInjections(clone);
+    RuntimeBaseline.restore(runtimePairs);
+    poolScripts(clone);
     return {
       html: clone.outerHTML,
       currentIndex: Editor.state.currentIndex,
@@ -34,7 +60,8 @@
   function restore(snapshot) {
     if (!snapshot) return;
     const parser = new DOMParser();
-    const doc = parser.parseFromString("<!DOCTYPE html>\n" + snapshot.html, "text/html");
+    const html = snapshot.html.replace(SCRIPT_TOKEN_RE, (_, n) => scriptPool[n]);
+    const doc = parser.parseFromString("<!DOCTYPE html>\n" + html, "text/html");
     Editor.state.deckDoc = doc;
     Editor.state.currentIndex = snapshot.currentIndex;
     const iframe = Editor.ui.deckFrame;
@@ -42,6 +69,7 @@
       Editable.install(iframe.contentDocument);
       Slides.attachClickNav(iframe.contentDocument);
       Slides.attachKeyboard(iframe.contentDocument);
+      Slides.watchActiveSlide(iframe.contentDocument);
       Editor.fitFrameToStage();
       Slides.rebuild();
     };
@@ -78,6 +106,8 @@
   function clear() {
     undoStack.length = 0;
     redoStack.length = 0;
+    scriptPool.length = 0;
+    scriptPoolIndex.clear();
   }
 
   function sizes() {

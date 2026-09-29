@@ -9,6 +9,9 @@
   const REVEAL_ATTR = "data-editor-reveal-all";
 
   function install(iframeDoc) {
+    // Record what the deck's own scripts changed on load before the editor
+    // adds anything of its own (see runtime-baseline.js).
+    RuntimeBaseline.capture(iframeDoc);
     injectStyle(iframeDoc);
     // Suspend inline goTo(N) handlers BEFORE scan/installBlockEditor so the
     // editor never accidentally triggers a deck navigation while wiring up.
@@ -669,6 +672,27 @@
         outline-offset: 3px;
         background: rgba(212,91,7,.05);
       }
+      /* 逐步出現的 .frag 與翻牌卡背面同樣攤開；翻牌卡改成正反面上下排列。 */
+      html[${REVEAL_ATTR}] .frag {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+      html[${REVEAL_ATTR}] .flip { height: auto !important; }
+      html[${REVEAL_ATTR}] .flip .flip-in {
+        transform: none !important;
+        transform-style: flat !important;
+      }
+      html[${REVEAL_ATTR}] .flip .face {
+        position: relative !important;
+        transform: none !important;
+        backface-visibility: visible !important;
+        -webkit-backface-visibility: visible !important;
+      }
+      html[${REVEAL_ATTR}] .flip .face + .face {
+        margin-top: 8px;
+        outline: 1px dashed rgba(212,91,7,.55);
+        outline-offset: 3px;
+      }
       /* Editor-only; lives in this stripped-on-save block instead of an
          inline style so a foreign deck's own position rule on images is
          never overridden in the saved file. */
@@ -693,6 +717,10 @@
       if (el.closest(".__editor_block_overlay__")) return;
       // Must contain a direct (non-whitespace) text child and no editable parent.
       if (el.closest("[data-edit-highlight=text]")) return;
+      // Prompt cards / chips are rendered by the deck's script from
+      // prompts.js on every load, so edits here could never be kept.
+      // Slides.attachClickNav shows a hint when they are clicked instead.
+      if (el.closest("[data-prompt], [data-chips]")) return;
       const childText = Array.from(el.childNodes).some(n => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim().length > 0);
       if (!childText) return;
       // Skip if it contains other block children; we want leaf-ish text.
@@ -700,6 +728,7 @@
       if (hasBlockChild) return;
       el.setAttribute("data-edit-highlight", "text");
       el.addEventListener("click", onTextClick, true);
+      el.addEventListener("paste", onTextPaste);
     });
 
     // 2) Images
@@ -716,6 +745,9 @@
   }
 
   function onTextClick(e) {
+    // Edit mode off means the deck behaves as presented: let its own click
+    // handlers (flip cards, checklists, reveal cards) receive the click.
+    if (!Editor.state.editMode) return;
     const el = e.currentTarget;
     // If user is ctrl/cmd clicking a link, allow default behavior by bailing.
     if (el.tagName === "A") return;
@@ -752,16 +784,24 @@
 
     el.addEventListener("blur", () => {
       iframeDoc.removeEventListener("selectionchange", selHandler);
-      finishEdit(el);
+      finishEdit(el, preText);
     }, { once: true });
     el.addEventListener("input", () => Editor.markDirty(), { once: true });
-    el.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") {
-        el.blur();
-      } else if (ev.key === "Enter" && !ev.shiftKey) {
-        ev.preventDefault();
-        el.blur();
-      }
+    // Enter / Shift+Enter / Escape are handled by Slides.attachKeyboard: its
+    // capture listener stops key propagation before it reaches this element.
+  }
+
+  // Paste as plain text: clipboard HTML would carry foreign fonts, colours
+  // and wrapper elements into the deck. Line breaks become <br>.
+  function onTextPaste(e) {
+    const el = e.currentTarget;
+    if (el.getAttribute("contenteditable") !== "true") return;
+    e.preventDefault();
+    const text = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+    const doc = el.ownerDocument;
+    text.replace(/\r\n?/g, "\n").split("\n").forEach((line, i) => {
+      if (i) doc.execCommand("insertLineBreak");
+      if (line) doc.execCommand("insertText", false, line);
     });
   }
 
@@ -785,8 +825,21 @@
     }
   }
 
-  function finishEdit(el) {
+  function finishEdit(el, preText) {
     el.removeAttribute("contenteditable");
+    // Chrome keeps typed spaces visible by inserting U+00A0, which would be
+    // saved as &nbsp;. Turn them back into plain spaces; if the text already
+    // used &nbsp; before this edit, only fix the trailing one.
+    const keepNbsp = (preText || "").includes("\u00a0");
+    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+    nodes.forEach((n, i) => {
+      const v = !keepNbsp ? n.nodeValue.replace(/\u00a0/g, " ")
+        : i === nodes.length - 1 ? n.nodeValue.replace(/\u00a0+$/, m => " ".repeat(m.length))
+        : n.nodeValue;
+      if (v !== n.nodeValue) n.nodeValue = v;
+    });
     Editor.markDirty();
     // Rebuild thumb for current slide
     if (global.Slides) Slides.rebuildThumbsOnly();
@@ -867,6 +920,7 @@
   }
 
   function onImageClick(e) {
+    if (!Editor.state.editMode) return;
     e.stopPropagation();
     e.preventDefault();
     const img = e.currentTarget;
@@ -876,6 +930,7 @@
   }
 
   function onBgClick(e) {
+    if (!Editor.state.editMode) return;
     // Only trigger when clicking the element itself (not a child)
     if (e.target !== e.currentTarget) return;
     e.stopPropagation();

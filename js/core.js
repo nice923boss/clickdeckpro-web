@@ -15,6 +15,9 @@
     dirHandle: null,      // FileSystemDirectoryHandle when user picks a folder
     fileHandle: null,     // FileSystemFileHandle for the currently loaded file
     zoomLevel: 1.0,       // multiplier on top of auto-fit scale; 1.0 = fit, 1.5 = 150%
+    eol: "\n",            // line ending of the loaded file; DOMParser folds CRLF to LF
+    slideNavClasses: [],  // which of active / is-active / is-prev the source slides carried
+    runtimeBaseline: null, // what the deck's own scripts changed on load (see runtime-baseline.js)
   };
 
   // Zoom bounds. Below 0.5 the preview becomes unreadable, above 4 there's
@@ -164,12 +167,25 @@
     Editable.repairDocumentStructure(state.deckDoc, slidesCount, { css: false });
   }
 
+  // Record the source file's shape before anything touches it: its line
+  // ending (so a save doesn't rewrite every line of a CRLF file) and which
+  // navigation classes its slides carried (so save can drop the ones the
+  // editor's own slide switching added).
+  function rememberSourceShape(content, doc) {
+    const crlf = (content.match(/\r\n/g) || []).length;
+    const lf = (content.match(/\n/g) || []).length - crlf;
+    state.eol = crlf > lf ? "\r\n" : "\n";
+    state.slideNavClasses = ["active", "is-active", "is-prev"]
+      .filter(c => doc.querySelector(".slide." + c));
+  }
+
   async function loadFromFileHandle(handle, name) {
     try {
       const file = await handle.getFile();
       const content = await file.text();
       const parser = new DOMParser();
       const doc = parser.parseFromString(content, "text/html");
+      rememberSourceShape(content, doc);
       state.fileName = name;
       state.deckDoc = doc;
       autoRepairOnLoad();
@@ -208,6 +224,7 @@
       }
       const parser = new DOMParser();
       const doc = parser.parseFromString(content, "text/html");
+      rememberSourceShape(content, doc);
       state.fileName = name;
       state.deckDoc = doc;
       autoRepairOnLoad();
@@ -288,6 +305,7 @@
       Editable.install(iframe.contentDocument);
       Slides.attachClickNav(iframe.contentDocument);
       Slides.attachKeyboard(iframe.contentDocument);
+      Slides.watchActiveSlide(iframe.contentDocument);
       fitFrameToStage();
       // Slides.rebuild() ran against the still-loading iframe during load, so
       // its activate() couldn't see the live slide to fill the inspector. Now
@@ -306,6 +324,7 @@
     const iframe = ui.deckFrame;
     if (!iframe || !iframe.contentDocument || !iframe.contentDocument.documentElement) return;
     const clone = iframe.contentDocument.documentElement.cloneNode(true);
+    const runtimePairs = RuntimeBaseline.pair(iframe.contentDocument.documentElement, clone);
     stripEditorInjections(clone);
     // Restore inline onclick="goTo(N)" we suspended at edit-mode entry so
     // state.deckDoc always mirrors the deck's published shape. The next
@@ -313,6 +332,7 @@
     if (window.Editable && Editable.cleanupGotoForSerialize) {
       Editable.cleanupGotoForSerialize(clone);
     }
+    RuntimeBaseline.restore(runtimePairs);
     // Strip children of containers marked data-clickdeck-runtime="fill" so
     // runtime-built dots / TOC items don't get frozen into the saved file
     // and re-accumulate on next load.
@@ -360,12 +380,14 @@
       ? iframe.contentDocument
       : state.deckDoc;
     const clone = src.documentElement.cloneNode(true);
+    const runtimePairs = RuntimeBaseline.pair(src.documentElement, clone);
     stripEditorInjections(clone);
     // Put inline onclick="goTo(N)" back so the saved HTML keeps its
     // original click-to-navigate behaviour after the editor is closed.
     if (window.Editable && Editable.cleanupGotoForSerialize) {
       Editable.cleanupGotoForSerialize(clone);
     }
+    RuntimeBaseline.restore(runtimePairs);
     // Strip children of containers marked data-clickdeck-runtime="fill" so
     // runtime-built dots / TOC items don't get frozen into the saved file
     // and re-accumulate on next load.
@@ -384,19 +406,35 @@
     // audience clicks a card. If it survives into the file the card ships with
     // the answer already showing, which kills the "先猜再點" design.
     normalizeRevealCardsForSave(clone);
-    return "<!DOCTYPE html>\n" + clone.outerHTML;
+    const html = "<!DOCTYPE html>\n" + clone.outerHTML;
+    // DOMParser folds CRLF to LF; write the file back with the line ending it
+    // was loaded with so an unedited deck doesn't rewrite every line.
+    return state.eol === "\r\n" ? html.replace(/\r?\n/g, "\r\n") : html;
   }
 
   function normalizeActiveSlideForSave(clone) {
-    const actives = clone.querySelectorAll(".slide.active");
-    if (actives.length === 0) return;
-    actives.forEach(s => s.classList.remove("active"));
-    const first = clone.querySelector(".slide");
-    if (first) first.classList.add("active");
+    // The editor's fallback navigation (Slides.activate) also toggles
+    // is-active / is-prev; drop whichever of those the source never used.
+    ["is-active", "is-prev"].forEach(c => {
+      if (state.slideNavClasses.includes(c)) return;
+      clone.querySelectorAll(".slide." + c).forEach(s => s.classList.remove(c));
+    });
+    ["active", "is-active"].forEach(c => {
+      const actives = clone.querySelectorAll(".slide." + c);
+      if (actives.length === 0) return;
+      actives.forEach(s => s.classList.remove(c));
+      const first = clone.querySelector(".slide");
+      if (first) first.classList.add(c);
+    });
   }
 
   function normalizeRevealCardsForSave(clone) {
     clone.querySelectorAll(".reveal.open").forEach(c => c.classList.remove("open"));
+    // Same for flip cards, fragments and checklist ticks the deck toggles
+    // while presenting (or that 顯示隱藏內容 exposed for editing).
+    clone.querySelectorAll(".flip.open").forEach(c => c.classList.remove("open"));
+    clone.querySelectorAll(".frag.shown").forEach(c => c.classList.remove("shown"));
+    clone.querySelectorAll(".checks li.on").forEach(c => c.classList.remove("on"));
   }
 
   // Manual structural repair: sync iframe edits into deckDoc, run the
@@ -476,6 +514,10 @@
       if (state.dirHandle) {
         await saveViaDirHandle(name, content);
       } else if (state.fileHandle) {
+        // Single-file mode has no sibling folder to hold a backup, so this
+        // path overwrites in place with no .bak (the folder label says so).
+        // createWritable() writes to a swap file and only replaces the
+        // original on close(), so a failed write leaves the old file intact.
         const w = await state.fileHandle.createWritable();
         await w.write(content);
         await w.close();
@@ -499,7 +541,8 @@
     // Backup: copy existing file to <name>.bak before overwriting
     try {
       const existing = await state.dirHandle.getFileHandle(name);
-      const prev = await (await existing.getFile()).text();
+      // Write the File blob itself so the backup is byte-exact (no re-decode).
+      const prev = await existing.getFile();
       const bak = await state.dirHandle.getFileHandle(name + ".bak", { create: true });
       const bw = await bak.createWritable();
       await bw.write(prev);
@@ -668,9 +711,17 @@
   function handleGlobalKey(e) {
     const t = e.target;
     const inInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    const key = (e.key || "").toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && key === "s" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      // Blur first so a half-typed inspector field fires its change handler
+      // before the deck is serialized.
+      if (inInput) t.blur();
+      saveDeck();
+      return;
+    }
     if (inInput) return;
     if (!(e.ctrlKey || e.metaKey)) return;
-    const key = e.key.toLowerCase();
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
       History.undo();
@@ -700,6 +751,7 @@
     init, state, ui, toast, markDirty, clearDirty,
     serializeDeck, fitFrameToStage, syncDeckFromIframe,
     buildIframeSrc, stripEditorInjections,
+    saveDeck,
   };
 
 })(window);
