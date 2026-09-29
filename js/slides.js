@@ -282,6 +282,13 @@
     });
   }
 
+  // Slide i exactly as a save would write it: in-place edits included, editor
+  // markers and DOM the deck's scripts rendered on load left out.
+  function savedSlide(i) {
+    const doc = new DOMParser().parseFromString(Editor.serializeDeck(), "text/html");
+    return detectSlides(doc)[i];
+  }
+
   function copySelected() {
     const st = Editor.state;
     const idoc = Editor.ui.deckFrame.contentDocument;
@@ -289,14 +296,9 @@
       Editor.toast("請先選取投影片", "err");
       return;
     }
-    const iframeSlides = detectSlides(idoc);
-    const slide = iframeSlides[st.currentIndex];
+    const slide = savedSlide(st.currentIndex);
     if (!slide) return;
-    // Clone and strip editor-injected attrs before storing
-    const clone = slide.cloneNode(true);
-    clone.querySelectorAll("[data-edit-highlight]").forEach(el => el.removeAttribute("data-edit-highlight"));
-    clone.querySelectorAll("[contenteditable]").forEach(el => el.removeAttribute("contenteditable"));
-    st.clipboardSlide = clone.outerHTML;
+    st.clipboardSlide = slide.outerHTML;
     Editor.toast(`已複製第 ${st.currentIndex + 1} 張投影片`, "ok");
   }
 
@@ -499,7 +501,7 @@
   global.Slides = {
     detectSlides, rebuild, rebuildThumbsOnly, activate,
     deleteSlide, moveSlide, insertSlide,
-    copySelected, cutSelected, pasteAfterSelected,
+    copySelected, cutSelected, pasteAfterSelected, savedSlide,
     attachClickNav, attachKeyboard, watchActiveSlide, reloadFrame,
   };
 

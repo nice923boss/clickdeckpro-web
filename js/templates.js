@@ -413,7 +413,9 @@
 
   async function confirmSaveTemplate() {
     const st = Editor.state;
-    const slide = st.slides[st.currentIndex];
+    // st.slides mirrors deckDoc as of the last rebuild and misses text edited
+    // in place since, so take the slide as a save would write it.
+    const slide = Slides.savedSlide(st.currentIndex);
     const name = document.getElementById("tpl-name").value.trim();
     if (!name) {
       Editor.toast("請輸入樣板名稱", "err");
@@ -423,7 +425,7 @@
     const extractCss = document.getElementById("tpl-extract-css").checked;
     const extractJs = document.getElementById("tpl-extract-js").checked;
 
-    const tpl = buildTemplate(slide, st.deckDoc, { name, category, extractCss, extractJs });
+    const tpl = buildTemplate(slide, slide.ownerDocument, { name, category, extractCss, extractJs });
     cache = cache.filter(t => t.id !== tpl.id);
     cache.push(tpl);
     persist();
