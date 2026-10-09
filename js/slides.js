@@ -99,6 +99,16 @@
             catch (_) { /* ignore and fall back to manual class toggle */ }
           }
         }
+        // generative-workshop-deck decks expose only Deck.go, which also starts
+        // the slide's p5 sketches and switches its backdrop. In the srcdoc
+        // iframe its trailing history.replaceState throws after that work is
+        // done; the throw also skips the slidechange event, so typewriter
+        // effects never rewrite text while it is being edited.
+        const deck = iframeWin.Deck;
+        if (!deckHandled && deck && typeof deck.go === "function") {
+          try { deck.go(i); } catch (_) { /* expected in srcdoc, see above */ }
+          deckHandled = deck.index === i;
+        }
       }
 
       if (!deckHandled) {
@@ -483,14 +493,11 @@
       if (t.closest("button, a, input, textarea, select, [onclick], [data-edit-highlight], [contenteditable='true']")) return;
       e.stopPropagation();
 
-      // Prompt cards / chips are not editable (Editable.scan skips them):
-      // the deck rebuilds them from prompts.js on every load.
-      const generated = t.closest("[data-prompt], [data-chips]");
-      if (generated) {
-        Editor.toast(generated.hasAttribute("data-prompt")
-          ? "這張提示詞卡由程式產生，請改原始檔 prompts.js"
-          : "這組標籤由程式產生，請改原始檔 prompts.js", "warn");
-      }
+      // p5 canvases, prompt cards and chips are drawn or rebuilt by deck
+      // scripts on every load (Editable.scan skips them), so their text is
+      // edited in the script source instead.
+      const generated = window.ScriptText && t.closest(ScriptText.MOUNTS);
+      if (generated) ScriptText.showFor(generated);
     }, true);
   }
 

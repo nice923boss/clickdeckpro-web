@@ -308,12 +308,10 @@
       Slides.watchActiveSlide(iframe.contentDocument);
       fitFrameToStage();
       // Slides.rebuild() ran against the still-loading iframe during load, so
-      // its activate() couldn't see the live slide to fill the inspector. Now
-      // that the deck has rendered, show the active slide's layout options.
-      if (window.Editable && Editable.showSlideProps && state.currentIndex >= 0) {
-        const live = Slides.detectSlides(iframe.contentDocument)[state.currentIndex];
-        if (live) Editable.showSlideProps(live, state.currentIndex);
-      }
+      // its activate() couldn't reach the live deck. Re-run it now so the deck
+      // shows the current slide (starting its sketches) and the inspector
+      // gets the active slide's layout options.
+      if (state.currentIndex >= 0) Slides.activate(state.currentIndex);
     };
     iframe.srcdoc = html;
   }

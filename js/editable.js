@@ -1218,9 +1218,15 @@
       </div>
     `;
     prependGotoSection(panel, img);
+    // generative-workshop-deck decks fill img[data-img] from their IMAGES
+    // table on every load, which would overwrite a manually chosen image.
+    const setSrc = src => {
+      img.setAttribute("src", src);
+      img.removeAttribute("data-img");
+    };
     panel.querySelector("#prop-src").addEventListener("change", e => {
       History.push();
-      img.setAttribute("src", e.target.value);
+      setSrc(e.target.value);
       Editor.markDirty();
       Slides.rebuildThumbsOnly();
     });
@@ -1230,7 +1236,7 @@
       try {
         const info = await fileToBase64(f);
         History.push();
-        img.setAttribute("src", info.dataUrl);
+        setSrc(info.dataUrl);
         panel.querySelector("#prop-src").value = info.dataUrl.slice(0, 80) + "...";
         Editor.markDirty();
         Slides.rebuildThumbsOnly();
@@ -1421,7 +1427,9 @@
         <button type="button" id="prop-slide-bg-remove" class="btn"${hasBg ? "" : " disabled"}>移除滿版底圖</button>
         <p class="hint">上傳的圖片會鋪滿這一頁當背景，只影響這一張投影片，其它頁不受影響。</p>
       </div>
-      <p class="placeholder">點擊中間簡報裡的文字、圖片或連結，即可編輯內容。</p>
+      <p class="placeholder">${slide.querySelector("[data-p5], [data-prompt], [data-chips]")
+        ? "點擊中間簡報裡的文字、圖片、連結、動態畫布或提示詞卡，即可編輯內容。"
+        : "點擊中間簡報裡的文字、圖片或連結，即可編輯內容。"}</p>
     `;
     if (!unsupported) {
       panel.querySelectorAll(".seg-btn").forEach(btn => {
@@ -2289,7 +2297,7 @@
   }
 
   global.Editable = {
-    install, scan, showTextProps, showImageProps, showLinkProps,
+    install, scan, clearProps, showTextProps, showImageProps, showLinkProps,
     showGotoProps, showSlideProps,
     suspendGoto, restoreGoto, cleanupGotoForSerialize,
     applyRevealHidden, REVEAL_ATTR,
